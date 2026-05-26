@@ -1,51 +1,80 @@
 # animation.py
 # -*- coding: utf-8 -*-
 
-"""
-Visualizzazione e animazione.
-Questo modulo NON simula: usa solo storici già calcolati.
-"""
-
 from typing import Dict, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from matplotlib.animation import FuncAnimation
-from matplotlib.patches import Patch
-from matplotlib.gridspec import GridSpec
 
 Position = Tuple[int, int]
 
-# ==================================================
-#   DISPLAY GRID
-# ==================================================
-def build_display_grid(
-    road: np.ndarray,
-    vehicle_types: Dict[int, str],
-    length_map: Dict[str, int],
-    colors: Dict[str, Tuple[float, float, float]]
-) -> np.ndarray:
 
+def build_display_grid(road, vehicle_types, length_map, colors):
     nlanes, length = road.shape
     img = np.zeros((nlanes, length, 3))
-
     for lane in range(nlanes):
         for col in range(length):
             vid = road[lane, col]
             if vid == 0:
                 continue
             vtype = vehicle_types[vid]
-            color = colors[vtype]
-            vlen = length_map[vtype]
-            img[lane, col] = color
-            for b in range(1, vlen):
-                img[lane, (col - b) % length] = color
-
+            img[lane, col] = colors[vtype]
+            for b in range(1, length_map[vtype]):
+                img[lane, (col - b) % length] = colors[vtype]
     return img
 
 
-# ==================================================
-#   MAIN ANIMATION
-# ==================================================
+def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
+    n_lanes, length = road_h.shape
+    canvas = np.full((length, length, 3), 0.15)
+    mid = length // 2
+
+    for ln in range(n_lanes):
+        row_idx = mid - n_lanes // 2 + ln
+        col_idx = mid - n_lanes // 2 + ln
+        if 0 <= row_idx < length:
+            canvas[row_idx, :] = 0.35
+        if 0 <= col_idx < length:
+            canvas[:, col_idx] = 0.35
+
+    for ln in range(n_lanes):
+        row_idx = mid - n_lanes // 2 + ln
+        if not (0 <= row_idx < length):
+            continue
+        for col in range(length):
+            vid = road_h[ln, col]
+            if vid == 0:
+                continue
+            vtype = vehicle_types.get(vid)
+            if vtype is None:
+                continue
+            canvas[row_idx, col] = colors[vtype]
+            for b in range(1, length_map[vtype]):
+                canvas[row_idx, (col - b) % length] = colors[vtype]
+
+    for ln in range(n_lanes):
+        col_idx = mid - n_lanes // 2 + ln
+        if not (0 <= col_idx < length):
+            continue
+        for pos in range(length):
+            vid = road_v[ln, pos]
+            if vid == 0:
+                continue
+            vtype = vehicle_types.get(vid)
+            if vtype is None:
+                continue
+            row_idx = length - 1 - pos
+            if 0 <= row_idx < length:
+                canvas[row_idx, col_idx] = colors[vtype]
+            for b in range(1, length_map[vtype]):
+                r = length - 1 - ((pos - b) % length)
+                if 0 <= r < length:
+                    canvas[r, col_idx] = colors[vtype]
+
+    return canvas
+
+
 def animate_from_history(
     history: Dict,
     *,
@@ -54,72 +83,65 @@ def animate_from_history(
     interval: int = 120,
     close_figure: bool = True,
 ):
-
-    road_hist = history["road_history"]
-    light_hist = history["light_state_history"]
-    vehicle_types = history["vehicle_types"]
+    road_hist        = history["road_history"]
+    road_v_hist      = history.get("road_v_history")
+    light_hist       = history["light_state_history"]
+    vehicle_types    = history["vehicle_types"]
+    use_intersection = history.get("use_intersection", False)
+    use_traffic_light = history.get("use_traffic_light", False)
+    params           = history.get("params")
 
     steps = len(road_hist)
     n_lanes, length = road_hist[0].shape
 
-    # -------------------------------
-    # Figure layout
-    # -------------------------------
-    fig = plt.figure(figsize=(22, 10))
-    gs = GridSpec(2, 1, height_ratios=[4, 1], figure=fig)
+    fig, ax = plt.subplots(figsize=(10, 10) if use_intersection else (16, 0.8 * n_lanes))
 
-    ax_road = fig.add_subplot(gs[0])
-    ax_density = fig.add_subplot(gs[1])
+    if use_intersection and road_v_hist is not None:
+        init_img = build_cross_grid(road_hist[0], road_v_hist[0], vehicle_types, length_map, colors)
+        aspect, origin = "equal", "upper"
+    else:
+        init_img = build_display_grid(road_hist[0], vehicle_types, length_map, colors)
+        aspect, origin = "auto", "lower"
 
-    img = ax_road.imshow(
-        build_display_grid(road_hist[0], vehicle_types, length_map, colors),
-        origin="lower",
-        aspect="equal",
-        interpolation="none"
-    )
-    ax_road.set_xticks([])
-    ax_road.set_yticks([])
+    img = ax.imshow(init_img, origin=origin, aspect=aspect, interpolation="none")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Traffic simulation", fontsize=14)
 
-    light_line = ax_road.axvline(
-        x=length // 2,
-        lw=5,
-        color="green"
-    )
+    legend_patches = [mpatches.Patch(color=c, label=k) for k, c in colors.items()]
+    ax.legend(handles=legend_patches, loc="upper right", fontsize=8)
 
-    density_line, = ax_density.plot([], [], lw=2)
-    ax_density.set_xlim(0, steps)
-    ax_density.set_ylim(0, 1)
-    ax_density.set_xlabel("Frame")
-    ax_density.set_ylabel("Density")
+    # Traffic lights — only if use_traffic_light is True
+    light_h, light_v = None, None
+    if use_traffic_light and params is not None:
+        if use_intersection:
+            light_h = ax.axhline(y=length // 2, lw=3, color="green", alpha=0.5)
+            light_v = ax.axvline(x=length // 2, lw=3, color="red",   alpha=0.5)
+        else:
+            light_h = ax.axvline(x=length // 2, lw=4, color="green")
 
-    density_hist = []
-
-    # -------------------------------
-    # Animation callback
-    # -------------------------------
     def animate(t):
-        road = road_hist[t]
-        img.set_data(
-            build_display_grid(road, vehicle_types, length_map, colors)
-        )
+        rh = road_hist[t]
+        rv = road_v_hist[t] if (use_intersection and road_v_hist) else None
 
-        # Semaforo
-        light_line.set_color("red" if light_hist[t] == "R" else "green")
+        if use_intersection and rv is not None:
+            frame_img = build_cross_grid(rh, rv, vehicle_types, length_map, colors)
+        else:
+            frame_img = build_display_grid(rh, vehicle_types, length_map, colors)
 
-        # Densità
-        density = np.count_nonzero(road) / road.size
-        density_hist.append(density)
-        density_line.set_data(range(len(density_hist)), density_hist)
+        img.set_data(frame_img)
 
-        return img, density_line, light_line
+        if light_h is not None and use_traffic_light and params is not None:
+            if use_intersection:
+                light_h.set_color("red"   if params.light.is_red_horizontal(t) else "green")
+                if light_v:
+                    light_v.set_color("green" if params.light.is_red_horizontal(t) else "red")
+            else:
+                light_h.set_color("red" if light_hist[t] == "R" else "green")
 
-    ani = FuncAnimation(
-        fig,
-        animate,
-        frames=steps,
-        interval=interval,
-        blit=False
-    )
+        return (img,)
+
+    ani = FuncAnimation(fig, animate, frames=steps, interval=interval, blit=False)
 
     if close_figure:
         plt.close(fig)

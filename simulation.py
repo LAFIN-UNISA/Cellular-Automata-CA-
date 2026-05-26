@@ -8,6 +8,39 @@ from update import update_step
 Position = Tuple[int, int]
 
 # ==================================================
+#   VEHICLE SPAWNING HELPER
+# ==================================================
+def _spawn_vehicles(road, density, fleet_mix, speed_limits, length_map, road_id, vid_start):
+    """Spawn vehicles randomly on a given road array. Returns updated dicts."""
+    n_lanes, length = road.shape
+    labels = list(fleet_mix.keys())
+    probs = np.array([fleet_mix[k] for k in labels])
+    probs /= probs.sum()
+
+    n_vehicles = int(density * n_lanes * length)
+    v_pos, v_speeds, v_cooldowns, v_types, v_road_id = {}, {}, {}, {}, {}
+    vid = vid_start
+
+    attempts = 0
+    while len(v_pos) < n_vehicles and attempts < n_vehicles * 10:
+        attempts += 1
+        lane = np.random.randint(n_lanes)
+        col = np.random.randint(length)
+        if road[lane, col] != 0:
+            continue
+        vtype = np.random.choice(labels, p=probs)
+        road[lane, col] = vid
+        v_pos[vid] = (lane, col)
+        v_speeds[vid] = np.random.randint(speed_limits[vtype]["v_max"] + 1)
+        v_cooldowns[vid] = 0
+        v_types[vid] = vtype
+        v_road_id[vid] = road_id
+        vid += 1
+
+    return v_pos, v_speeds, v_cooldowns, v_types, v_road_id, vid
+
+
+# ==================================================
 #   MAIN SIMULATION
 # ==================================================
 def run_simulation(
@@ -20,6 +53,9 @@ def run_simulation(
     speed_limits: Dict[str, Dict[str, int]],
     use_traffic_light: bool = False,
     use_changing_lanes: bool = False,
+    use_intersection: bool = False,
+    turning_ratio: float = 0.5,
+    priority_look_ahead: int = 15,
     seed: Optional[int] = None,
     **lane_change_params
 ) -> Dict[str, Any]:
@@ -28,37 +64,48 @@ def run_simulation(
         np.random.seed(seed)
 
     params = SimulationParams()
+    params.intersection.use_intersection = use_intersection
+    params.intersection.turning_ratio = turning_ratio
+    params.intersection.priority_look_ahead = priority_look_ahead
 
     # -------------------------------
-    # Initial state
+    # Road initialisation
+    # horizontal road: vehicles move right  (road_id = 0)
+    # vertical road:   vehicles move up     (road_id = 1)
     # -------------------------------
-    road = np.zeros((n_lanes, params.road.length), dtype=int)
-    v_pos, v_speeds, v_cooldowns, v_types = {}, {}, {}, {}
+    road_h = np.zeros((n_lanes, params.road.length), dtype=int)  # horizontal
+    road_v = np.zeros((n_lanes, params.road.length), dtype=int)  # vertical
 
-    labels = list(fleet_mix.keys())
-    probs = np.array([fleet_mix[k] for k in labels])
-    probs /= probs.sum()
+    # Spawn on horizontal road (road_id = 0)
+    p0, s0, c0, t0, r0, next_vid = _spawn_vehicles(
+        road_h, density, fleet_mix, speed_limits, length_map, road_id=0, vid_start=1
+    )
 
-    n_vehicles = int(density * n_lanes * params.road.length)
-    vid = 1
-    while len(v_pos) < n_vehicles:
-        lane = np.random.randint(n_lanes)
-        col = np.random.randint(params.road.length)
-        if road[lane, col] == 0:
-            vtype = np.random.choice(labels, p=probs)
-            road[lane, col] = vid
-            v_pos[vid] = (lane, col)
-            v_speeds[vid] = np.random.randint(speed_limits[vtype]["v_max"] + 1)
-            v_cooldowns[vid] = 0
-            v_types[vid] = vtype
-            vid += 1
+    # Spawn on vertical road (road_id = 1) only if intersection active
+    if use_intersection:
+        p1, s1, c1, t1, r1, next_vid = _spawn_vehicles(
+            road_v, density, fleet_mix, speed_limits, length_map, road_id=1, vid_start=next_vid
+        )
+    else:
+        p1, s1, c1, t1, r1 = {}, {}, {}, {}, {}
+
+    # Merge all vehicle dicts
+    v_pos       = {**p0, **p1}
+    v_speeds    = {**s0, **s1}
+    v_cooldowns = {**c0, **c1}
+    v_types     = {**t0, **t1}
+    v_road_id   = {**r0, **r1}
+    # Track whether vehicle has already decided to turn (avoid re-rolling every frame)
+    v_will_turn = {}
 
     # -------------------------------
-    # Histories (for GIF + acoustics)
+    # Histories
     # -------------------------------
-    road_history = []
+    road_h_history = []
+    road_v_history = []
     positions_history = []
     speeds_history = []
+    roads_history = []
     light_history = []
 
     total_moved = 0
@@ -68,22 +115,26 @@ def run_simulation(
     #   TIME LOOP
     # ===============================
     for t in range(sim_steps):
-
-        road_history.append(road.copy())
+        road_h_history.append(road_h.copy())
+        road_v_history.append(road_v.copy())
         positions_history.append(dict(v_pos))
         speeds_history.append(dict(v_speeds))
-
+        roads_history.append(dict(v_road_id))
         light_history.append(
             "R" if (use_traffic_light and params.light.is_red(t)) else "G"
         )
 
-        road, v_speeds, v_cooldowns, v_pos, moved, lane_changes = update_step(
-            road,
-            v_speeds,
-            v_cooldowns,
-            v_pos,
-            v_types,
-            speed_limits,
+        road_h, road_v, v_speeds, v_cooldowns, v_pos, v_road_id, v_will_turn, moved, lc = update_step(
+            road_h=road_h,
+            road_v=road_v,
+            speeds=v_speeds,
+            cooldowns=v_cooldowns,
+            positions=v_pos,
+            v_road_id=v_road_id,
+            v_will_turn=v_will_turn,
+            v_types=v_types,
+            speed_limits=speed_limits,
+            length_map=length_map,
             frame=t,
             params=params,
             use_traffic_light=use_traffic_light,
@@ -92,15 +143,21 @@ def run_simulation(
         )
 
         total_moved += moved
-        total_lane_changes += lane_changes
+        total_lane_changes += lc
 
     return {
-        "road_history": road_history,
+        "road_history":      road_h_history,   # horizontal (main display)
+        "road_v_history":    road_v_history,    # vertical
         "positions_history": positions_history,
-        "speeds_history": speeds_history,
-        "vehicle_types": v_types,
+        "speeds_history":    speeds_history,
+        "roads_history":     roads_history,
+        "vehicle_types":     v_types,
+        "vehicle_roads":     v_road_id,
         "light_state_history": light_history,
-        "mean_flow": total_moved / sim_steps,
+        "mean_flow":         total_moved / sim_steps,
         "total_lane_changes": total_lane_changes,
-        "n_vehicles": n_vehicles,
+        "n_vehicles":        len(v_pos),
+        "use_intersection":  use_intersection,
+        "use_traffic_light": use_traffic_light,
+        "params":            params,
     }

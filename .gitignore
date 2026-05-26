@@ -18,3 +18,5 @@ Vecchi_files_di_Ulysse/
 *.bat
 #files txt
 *.txt
+#Simulation folders
+simulation_*/
