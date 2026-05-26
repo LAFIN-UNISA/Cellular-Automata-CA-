@@ -1,0 +1,20 @@
+#Cartelle varie
+vscode/
+__pycache__/
+venv/
+.ipynb_checkpoints/
+Simulazioni_contributo_Adelaide_2026/
+Vecchi_files_di_Ulysse/
+#gif
+*.gif
+#files png
+*.png
+#files excels
+*.xlsx
+*.xls
+#files h5 (raccolte di dizionari)
+*.h5
+#files bat
+*.bat
+#files txt
+*.txt
