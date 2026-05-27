@@ -18,5 +18,7 @@ Vecchi_files_di_Ulysse/
 *.bat
 #files txt
 *.txt
+#Need to keep requirements
+!requirements.txt
 #Simulation folders
 simulation_*/
