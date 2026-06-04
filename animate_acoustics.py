@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Animazione del livello di potenza sonora totale della strada
-(Lw totale vs frame).
+Animation of the total sound power level of the road
+(Total Lw vs frame).
 """
 
 import matplotlib.pyplot as plt
@@ -18,9 +18,9 @@ def animate_Lw_total(
     close_figure: bool = True
 ):
     """
-    Crea una GIF del Lw totale della strada che si aggiorna nel tempo.
+    Creates a GIF of the total Lw of the road that updates over time.
 
-    noise_db deve contenere:
+    noise_db must contain:
         noise_db["Lw_total"] = list of Lw values per frame
     """
 

@@ -9,22 +9,22 @@ def propagate_Lw_to_Lp_linear(
     r0=1.0
 ):
     """
-    Propagazione lineare da Lw a Lp secondo:
+    Linear propagation from Lw to Lp according to:
         Lp = Lw - 20*log10(r/r0) - 11
 
-    Parametri
+    Parameters
     ----------
     Lw : float
-        Livello di potenza sonora [dB]
+        Sound power level [dB]
     r : float or ndarray
-        Distanza sorgente-ricevitore [m]
+        Source-receiver distance [m]
     r0 : float
-        Distanza di riferimento [m]
+        Reference distance [m]
 
-    Ritorna
+    Returns
     -------
     Lp : float or ndarray
-        Livello di pressione sonora [dB]
+        Sound pressure level [dB]
     """
 
     r = np.maximum(r, 1e-6)
@@ -40,7 +40,7 @@ def create_spatial_grid(
     dy
 ):
     """
-    Crea la griglia spaziale (x, y) per la mappa di rumore.
+    Creates the spatial grid (x, y) for the noise map.
     """
 
     x = np.arange(0, road_length + dx, dx)
@@ -58,34 +58,34 @@ def compute_Lp_field_frame(
     r_min
 ):
     """
-    Calcola il campo di livello Lp(x,y) per un frame temporale,
-    sommando i contributi logaritmicamente.
+    Computes the Lp(x,y) sound pressure level field for a temporal frame,
+    summing contributions logarithmically.
 
-    La posizione laterale dei veicoli è letta direttamente da df["y_m"].
+    The lateral position of vehicles is read directly from df["y_m"].
     """
 
-    # accumulatore energetico
+    # energy accumulator
     S = np.zeros_like(X)
 
     for _, row in df_frame.iterrows():
 
         x_i = row["x_m"]
-        y_i = row["y_m"]          # ← ORA USIAMO QUESTO
+        y_i = row["y_m"]          # ← NOW WE USE THIS
         Lw_i = row["Lw_total"]
 
-        # distanza euclidea
+        # euclidean distance
         # r = np.sqrt((X - x_i) ** 2 + (Y - y_i) ** 2)
         r_raw = np.sqrt((X - x_i) ** 2 + (Y - y_i) ** 2)
-        r = np.maximum(r_raw, r_min)   # cutoff di campo vicino
+        r = np.maximum(r_raw, r_min)   # near field cutoff
 
 
-        # propagazione
+        # propagation
         Lp_i = propagate_Lw_to_Lp_linear(Lw_i, r)
 
-        # somma logaritmica (energetica)
+        # logarithmic (energetic) sum
         S += 10.0 ** (Lp_i / 10.0)
 
-    # ritorno in dB
+    # return to dB
     Lp_tot = 10.0 * np.log10(S)
 
     return Lp_tot
