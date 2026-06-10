@@ -36,9 +36,6 @@ def update_step(
     int_row       = params.intersection.intersection_row
     conflict_zone = params.intersection.conflict_zone
 
-    # Process vertical vehicles (priority) first, then horizontal
-    # This prevents two vehicles from both seeing intersection_free()=True
-    # in the same frame and colliding
     vids_v = [vid for vid in positions if v_road_id.get(vid) == 1]
     vids_h = [vid for vid in positions if v_road_id.get(vid) == 0]
     np.random.shuffle(vids_v)
@@ -52,13 +49,15 @@ def update_step(
         return int_row if road_id == 1 else int_col
 
     def forward_gap(lane, pos, road_id):
-        rd  = get_road(road_id)
-        gap = 0
+        """Gap to the tail of the next vehicle.
+        Since all body cells are marked on the grid, stop at first foreign cell."""
+        rd = get_road(road_id)
         for d in range(1, length):
-            if rd[lane, (pos + d) % length] != 0:
-                break
-            gap += 1
-        return gap
+            cell = (pos + d) % length
+            occupant = rd[lane, cell]
+            if occupant != 0 and occupant != vid:
+                return d - 1
+        return length - 1
 
     def rear_safe(lane, pos, road_id):
         rd = get_road(road_id)
@@ -68,26 +67,14 @@ def update_step(
         return True
 
     def intersection_free(exclude_vid=None):
-        max_len = max(length_map.values())
-        for d in range(max_len + 1):
-            for ln in range(n_lanes):
-                # Horizontal: vehicle head at (int_col - d) occupies
-                # cells [int_col-d-vlen+1 .. int_col-d], check if int_col is in that range
-                col = (int_col - d) % length
-                v = road_h[ln, col]
-                if v != 0 and v != exclude_vid:
-                    vlen = length_map.get(v_types.get(v, "L"), 1)
-                    # vehicle head at col, tail at col-vlen+1
-                    # intersection at int_col: occupied if col-vlen+1 <= int_col <= col
-                    if col - vlen + 1 <= int_col <= col:
-                        return False
-                # Vertical: same logic
-                row = (int_row - d) % length
-                v = road_v[ln, row]
-                if v != 0 and v != exclude_vid:
-                    vlen = length_map.get(v_types.get(v, "L"), 1)
-                    if row - vlen + 1 <= int_row <= row:
-                        return False
+        """Since all body cells are marked on grid, just check intersection cell."""
+        for ln in range(n_lanes):
+            v = road_h[ln, int_col]
+            if v != 0 and v != exclude_vid:
+                return False
+            v = road_v[ln, int_row]
+            if v != 0 and v != exclude_vid:
+                return False
         return True
 
     def cell_before_int_v_free():
@@ -99,7 +86,6 @@ def update_step(
                 return False
         return True
 
-    # ------------------------------------------------------------------
     for vid in vids:
         if vid not in positions:
             continue
@@ -108,6 +94,7 @@ def update_step(
         road_id   = v_road_id[vid]
         vtype     = v_types[vid]
         v_max     = speed_limits[vtype]["v_max"]
+        vlen      = length_map.get(vtype, 1)
         i_pos     = int_pos(road_id)
 
         if cooldowns.get(vid, 0) > 0:
@@ -129,25 +116,21 @@ def update_step(
             v = min(v, max(dist - 1, 0))
 
         # 3) Intersection approach rules (no traffic light)
-        # Only apply to vehicles strictly BEFORE the intersection (pos < i_pos)
-        # Vehicles past the intersection are never blocked.
         if params.intersection.use_intersection and not use_traffic_light:
-            dist_to_int = i_pos - pos  # linear, no modulo
+            dist_to_int = i_pos - pos  # linear, no modulo — only valid if pos < i_pos
 
-            if 0 < dist_to_int:
-                # Everyone limited to 1 cell/frame within v_max cells of intersection
-                if dist_to_int <= v_max:
-                    v = min(v, 1)
+            if 0 < dist_to_int <= v_max:
+                v = min(v, 1)
 
-                    # Vertical (priority): enter only if intersection free
-                    if road_id == 1 and dist_to_int == 1:
-                        if not intersection_free(exclude_vid=vid):
-                            v = 0
+                # Vertical (priority): enter only if intersection cell free
+                if road_id == 1 and dist_to_int == 1:
+                    if not intersection_free(exclude_vid=vid):
+                        v = 0
 
-                    # Horizontal (yield): enter only if intersection free AND cell just before intersection on vertical is free
-                    elif road_id == 0 and dist_to_int == 1:
-                        if not (intersection_free(exclude_vid=vid) and cell_before_int_v_free()):
-                            v = 0
+                # Horizontal (yield): intersection free AND cell before vertical free
+                elif road_id == 0 and dist_to_int == 1:
+                    if not (intersection_free(exclude_vid=vid) and cell_before_int_v_free()):
+                        v = 0
 
         # 4) Forward gap
         gap = forward_gap(lane, pos, road_id)
@@ -174,8 +157,12 @@ def update_step(
                     tgt_lane  = ln
                     best_gain = gain
             if tgt_lane != lane:
-                get_road(road_id)[lane, pos]      = 0
-                get_road(road_id)[tgt_lane, pos]  = vid
+                # Clear all body cells on old lane
+                for b in range(vlen):
+                    get_road(road_id)[lane, (pos - b) % length] = 0
+                # Place on new lane
+                for b in range(vlen):
+                    get_road(road_id)[tgt_lane, (pos - b) % length] = vid
                 positions[vid]  = (tgt_lane, pos)
                 cooldowns[vid]  = COOL_DOWN
                 lane_changes   += 1
@@ -189,7 +176,7 @@ def update_step(
 
         will_turn = v_will_turn.get(vid, False)
 
-        # 7b) Stop before intersection if destination occupied (turning vehicles)
+        # 7b) Stop if turning but destination occupied
         if params.intersection.use_intersection and will_turn:
             if 0 < i_pos - pos <= conflict_zone + v_max:
                 dist_to_int = i_pos - pos
@@ -201,46 +188,49 @@ def update_step(
         # 8) New position
         new_pos = (pos + v) % length
 
-        # Anti-collision guard on current road
+        # Anti-collision guard
         rd_current = get_road(road_id)
-        while v > 0 and rd_current[lane, new_pos] != 0 and rd_current[lane, new_pos] != vid:
-            v      -= 1
-            new_pos = (pos + v) % length
+        while v > 0:
+            cell = (pos + v) % length
+            if rd_current[lane, cell] == 0 or rd_current[lane, cell] == vid:
+                break
+            v -= 1
+        new_pos = (pos + v) % length
 
-        # Anti-collision on destination road (turning)
-        if (params.intersection.use_intersection and will_turn
-                and abs(new_pos - i_pos) <= 2):
-            if road_id == 0 and road_v[lane, int_row] != 0:
-                v = 0; new_pos = pos
-            elif road_id == 1 and road_h[lane, int_col] != 0:
-                v = 0; new_pos = pos
+        # 9) Move — clear all body cells, rewrite at new position
+        for b in range(vlen):
+            rd_current[lane, (pos - b) % length] = 0
 
-        # 9) Move
-        rd_current[lane, pos] = 0
-
+        # Road switch: only when tail has fully crossed intersection
         switched = False
-        if (params.intersection.use_intersection and will_turn
-                and abs(new_pos - i_pos) <= 2 and v > 0):
-            if road_id == 0 and road_v[lane, int_row] == 0:
-                road_v[lane, int_row] = vid
-                v_road_id[vid] = 1
-                positions[vid] = (lane, int_row)
-                v_will_turn.pop(vid, None)
-                switched = True
-            elif road_id == 1 and road_h[lane, int_col] == 0:
-                road_h[lane, int_col] = vid
-                v_road_id[vid] = 0
-                positions[vid] = (lane, int_col)
-                v_will_turn.pop(vid, None)
-                switched = True
+        if params.intersection.use_intersection and will_turn and v > 0:
+            tail_new = new_pos - vlen + 1
+            if road_id == 0 and new_pos >= i_pos and tail_new >= i_pos:
+                if road_v[lane, i_pos] == 0:
+                    for b in range(vlen):
+                        road_v[lane, (i_pos - b) % length] = vid
+                    v_road_id[vid] = 1
+                    positions[vid] = (lane, i_pos)
+                    v_will_turn.pop(vid, None)
+                    switched = True
+            elif road_id == 1 and new_pos >= i_pos and tail_new >= i_pos:
+                if road_h[lane, i_pos] == 0:
+                    for b in range(vlen):
+                        road_h[lane, (i_pos - b) % length] = vid
+                    v_road_id[vid] = 0
+                    positions[vid] = (lane, i_pos)
+                    v_will_turn.pop(vid, None)
+                    switched = True
 
         if not switched:
             target_rd = get_road(v_road_id[vid])
             if target_rd[lane, new_pos] == 0 or new_pos == pos:
-                target_rd[lane, new_pos] = vid
+                for b in range(vlen):
+                    target_rd[lane, (new_pos - b) % length] = vid
                 positions[vid] = (lane, new_pos)
             else:
-                target_rd[lane, pos] = vid
+                for b in range(vlen):
+                    rd_current[lane, (pos - b) % length] = vid
                 positions[vid] = (lane, pos)
                 v = 0
 

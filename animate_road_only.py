@@ -11,6 +11,7 @@ Position = Tuple[int, int]
 
 
 def build_display_grid(road, vehicle_types, length_map, colors):
+    """Build RGB image directly from grid — all body cells are already marked."""
     n_lanes, length = road.shape
     img = np.zeros((n_lanes, length, 3))
     for lane in range(n_lanes):
@@ -18,10 +19,10 @@ def build_display_grid(road, vehicle_types, length_map, colors):
             vid = road[lane, col]
             if vid == 0:
                 continue
-            vtype = vehicle_types[vid]
+            vtype = vehicle_types.get(vid)
+            if vtype is None:
+                continue
             img[lane, col] = colors[vtype]
-            for b in range(1, length_map[vtype]):
-                img[lane, (col - b) % length] = colors[vtype]
     return img
 
 
@@ -50,8 +51,6 @@ def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
             if vtype is None:
                 continue
             canvas[row_idx, col] = colors[vtype]
-            for b in range(1, length_map[vtype]):
-                canvas[row_idx, (col - b) % length] = colors[vtype]
 
     for ln in range(n_lanes):
         col_idx = mid - n_lanes // 2 + ln
@@ -67,10 +66,6 @@ def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
             row_idx = length - 1 - pos
             if 0 <= row_idx < length:
                 canvas[row_idx, col_idx] = colors[vtype]
-            for b in range(1, length_map[vtype]):
-                r = length - 1 - ((pos - b) % length)
-                if 0 <= r < length:
-                    canvas[r, col_idx] = colors[vtype]
 
     return canvas
 

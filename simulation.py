@@ -17,19 +17,32 @@ def _spawn_vehicles(road, density, fleet_mix, speed_limits, length_map, road_id,
     probs = np.array([fleet_mix[k] for k in labels])
     probs /= probs.sum()
 
-    n_vehicles = int(density * n_lanes * length)
+    # Density = fraction of cells occupied
+    # Average vehicle length weighted by fleet_mix
+    avg_len = sum(
+        fleet_mix[vt] * length_map.get(vt, 1)
+        for vt in fleet_mix
+    ) / sum(fleet_mix.values())
+    # Number of vehicles to reach target cell occupancy
+    n_vehicles = int((density * n_lanes * length) / avg_len)
+
     v_pos, v_speeds, v_cooldowns, v_types, v_road_id = {}, {}, {}, {}, {}
     vid = vid_start
 
     attempts = 0
     while len(v_pos) < n_vehicles and attempts < n_vehicles * 10:
         attempts += 1
-        lane = np.random.randint(n_lanes)
-        col = np.random.randint(length)
-        if road[lane, col] != 0:
-            continue
+        lane  = np.random.randint(n_lanes)
+        col   = np.random.randint(length)
         vtype = np.random.choice(labels, p=probs)
-        road[lane, col] = vid
+        vlen  = length_map.get(vtype, 1)
+        # Check head cell AND all body cells are free
+        cells = [(col - b) % length for b in range(vlen)]
+        if any(road[lane, c] != 0 for c in cells):
+            continue
+        # Mark ALL body cells on grid to block future spawns
+        for c in cells:
+            road[lane, c] = vid
         v_pos[vid] = (lane, col)
         v_speeds[vid] = np.random.randint(speed_limits[vtype]["v_max"] + 1)
         v_cooldowns[vid] = 0
