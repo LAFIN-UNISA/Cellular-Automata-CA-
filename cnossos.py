@@ -19,17 +19,17 @@ def lw_vehicle_mono(v_type, speed_kmh, acc_ms2):
     c = CNOSSOS_COEFFS[v_type]
     v = max(speed_kmh, 1e-3)
 
-    Lw_roll = (
+    Lw_roll = max(0.0, (
         c["A0"] +
         c["A1"] * np.log10(v / V_REF) +
         c["A2"] * (v - V_REF) / V_REF
-    )
+    ))
 
-    Lw_engine = (
+    Lw_engine = max(0.0, (
         c["B0"] +
         c["B1"] * (v - V_REF) / V_REF +
         c["B2"] * acc_ms2
-    )
+    ))
 
     Lw_total = 10 * np.log10(
         10**(Lw_roll / 10) + 10**(Lw_engine / 10)
