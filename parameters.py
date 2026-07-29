@@ -26,6 +26,7 @@ class IntersectionParams:
     turning_ratio: float = 0.5         # fraction of vehicles that turn at intersection (0-1)
     conflict_zone: int = 1             # cells around intersection where conflict is checked
     priority_look_ahead: int = 1      # cells to look ahead to detect incoming vehicles (configurable priority rule)
+    bidirectional: bool = False        # True = right-of-way rule, False = vertical always priority
 
 
 # ==================================================

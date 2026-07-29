@@ -10,10 +10,22 @@ from matplotlib.animation import FuncAnimation
 Position = Tuple[int, int]
 
 
-def build_display_grid(road, vehicle_types, length_map, colors):
-    """Build RGB image directly from grid — all body cells are already marked."""
+def _directional_color(base_color, *, road_id, direction):
+    color = np.array(base_color, dtype=float)
+    if road_id == 0:  # horizontal road
+        if direction > 0:
+            return np.clip(color + np.array([0.05, 0.08, 0.02]), 0.0, 1.0)
+        return np.clip(color + np.array([0.08, 0.02, 0.08]), 0.0, 1.0)
+    # vertical road
+    if direction > 0:
+        return np.clip(color + np.array([0.02, 0.08, 0.05]), 0.0, 1.0)
+    return np.clip(color + np.array([0.08, 0.04, 0.02]), 0.0, 1.0)
+
+
+def build_display_grid(road, vehicle_types, length_map, colors, vehicle_directions=None):
     nlanes, length = road.shape
     img = np.zeros((nlanes, length, 3))
+    directions = vehicle_directions or {}
     for lane in range(nlanes):
         for col in range(length):
             vid = road[lane, col]
@@ -22,11 +34,13 @@ def build_display_grid(road, vehicle_types, length_map, colors):
             vtype = vehicle_types.get(vid)
             if vtype is None:
                 continue
-            img[lane, col] = colors[vtype]
+            base_color = colors.get(vtype, (0.7, 0.7, 0.7))
+            direction = directions.get(vid, 1)
+            img[lane, col] = _directional_color(base_color, road_id=0, direction=direction)
     return img
 
 
-def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
+def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors, vehicle_directions=None):
     n_lanes, length = road_h.shape
     canvas = np.full((length, length, 3), 0.15)
     mid = length // 2
@@ -38,6 +52,8 @@ def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
             canvas[row_idx, :] = 0.35
         if 0 <= col_idx < length:
             canvas[:, col_idx] = 0.35
+
+    directions = vehicle_directions or {}
 
     # Horizontal vehicles — all body cells already marked on grid
     for ln in range(n_lanes):
@@ -51,7 +67,9 @@ def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
             vtype = vehicle_types.get(vid)
             if vtype is None:
                 continue
-            canvas[row_idx, col] = colors[vtype]
+            base_color = colors.get(vtype, (0.7, 0.7, 0.7))
+            direction = directions.get(vid, 1)
+            canvas[row_idx, col] = _directional_color(base_color, road_id=0, direction=direction)
 
     # Vertical vehicles — all body cells already marked on grid
     for ln in range(n_lanes):
@@ -65,9 +83,11 @@ def build_cross_grid(road_h, road_v, vehicle_types, length_map, colors):
             vtype = vehicle_types.get(vid)
             if vtype is None:
                 continue
+            base_color = colors.get(vtype, (0.7, 0.7, 0.7))
+            direction = directions.get(vid, 1)
             row_idx = length - 1 - pos
             if 0 <= row_idx < length:
-                canvas[row_idx, col_idx] = colors[vtype]
+                canvas[row_idx, col_idx] = _directional_color(base_color, road_id=1, direction=direction)
 
     return canvas
 
@@ -93,11 +113,15 @@ def animate_from_history(
 
     fig, ax = plt.subplots(figsize=(10, 10) if use_intersection else (16, 0.8 * n_lanes))
 
+    directions_hist = history.get("directions_history")
+    if directions_hist is None:
+        directions_hist = [history.get("vehicle_directions", {}) for _ in range(steps)]
+
     if use_intersection and road_v_hist is not None:
-        init_img = build_cross_grid(road_hist[0], road_v_hist[0], vehicle_types, length_map, colors)
+        init_img = build_cross_grid(road_hist[0], road_v_hist[0], vehicle_types, length_map, colors, directions_hist[0])
         aspect, origin = "equal", "upper"
     else:
-        init_img = build_display_grid(road_hist[0], vehicle_types, length_map, colors)
+        init_img = build_display_grid(road_hist[0], vehicle_types, length_map, colors, directions_hist[0])
         aspect, origin = "auto", "lower"
 
     img = ax.imshow(init_img, origin=origin, aspect=aspect, interpolation="none")
@@ -121,10 +145,11 @@ def animate_from_history(
         rh = road_hist[t]
         rv = road_v_hist[t] if (use_intersection and road_v_hist) else None
 
+        directions = directions_hist[t] if t < len(directions_hist) else {}
         if use_intersection and rv is not None:
-            frame_img = build_cross_grid(rh, rv, vehicle_types, length_map, colors)
+            frame_img = build_cross_grid(rh, rv, vehicle_types, length_map, colors, directions)
         else:
-            frame_img = build_display_grid(rh, vehicle_types, length_map, colors)
+            frame_img = build_display_grid(rh, vehicle_types, length_map, colors, directions)
 
         img.set_data(frame_img)
 

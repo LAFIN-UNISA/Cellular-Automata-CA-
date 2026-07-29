@@ -6,7 +6,7 @@ from cnossos import lw_vehicle_mono
 
 INTERSECTION_CELL = 50  # must match params.intersection.intersection_col/row
 
-def build_noise_database_over_time(all_frames, cell_length_m, dt, return_df=True):
+def build_noise_database_over_time(all_frames, cell_length_m, dt, n_lanes=1, return_df=True):
     """
     Build temporal database of emissions from traffic microscopic histories.
 
@@ -53,13 +53,18 @@ def build_noise_database_over_time(all_frames, cell_length_m, dt, return_df=True
             Lw_tot, Lw_roll, Lw_eng = lw_vehicle_mono(vtype, speed_kmh, acc)
             frame_Lw.append(Lw_tot)
 
+            LANE_WIDTH = 7.5  # metres per lane (visual spacing)
+
+            # Centre lanes around intersection_m:
+            # With n_lanes total, lane offsets are symmetric around 0
+            # lane 0 → -LANE_WIDTH/2, lane 1 → +LANE_WIDTH/2, etc.
+            lane_offset = (lane - (n_lanes - 1) / 2.0) * LANE_WIDTH
+
             if road_id == 0:
-                # Horizontal: moves along x, fixed y = intersection centre
                 x_m = cell * cell_length_m
-                y_m = intersection_m
+                y_m = intersection_m + lane_offset
             else:
-                # Vertical: moves along y, fixed x = intersection centre
-                x_m = intersection_m
+                x_m = intersection_m + lane_offset
                 y_m = cell * cell_length_m
 
             rows.append({
